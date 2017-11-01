@@ -1,0 +1,586 @@
+#!/usr/bin/perl
+#By Thomas J Creedy, thomas@tjcreedy.co.uk
+
+use warnings;
+use strict;
+use Getopt::Long;
+use File::Basename;
+use LWP::Simple;
+use List::Util qw(sum);
+use Data::Dumper;
+use Storable;
+
+my $version = "0.1.1"; #31/10/17
+
+my ($contigfile,$baitfile,$taxonomyfile,$librariesfile,$savedfile);
+my $interactive;
+my $outpath = ".";
+my %parameters = (
+		'threads' => 8,
+		'namefield' => 1,
+		'dupid' => 100,
+		'duplength' => 100,
+		'baitid' => 99,
+		'baitlength' => 100,
+		'taxmin' => 0.25,
+		);
+my $verbose;
+my $help;
+
+
+my $script = basename($0, ());
+
+########################################################
+# USAGE
+#
+my $usage =<<USAGE;
+
+Description:
+
+	This script carries out baiting of anonymous contigs using known barcodes to identify contigs. Most simply, the script requires two files: a fasta of contigs and a fasta of barcodes. In the latter file, the taxonomic name of each barcode is by default taken to be the first part of each fasta header separated by one of "_", "-" and/or ".". Thus the taxonomic name of the sequence with header ">col324_sample4.extract1-5" will be taken to be "col324". The part number can be specified using the -namefield option.
+	Optionally, two further files may be passed: a taxonomy file and a libraries file. Each of these should be a tab- or comma-separated tabular file, with no header row. The first column of the taxonomy file should contain taxonomic names in the same format as the barcode headers, with subsequent columns containing taxonomic ranks, in descending order. These may be in separate columns or in a single column separated by ";". The first column of the libraries file should also contain taxonomic names in the same format as the barcode headers; in this case, the third column should contain a number indicating the MMG library in which this species is expected to be found.
+	
+	The first function the script undertakes is to parse the barcodes for duplicates. This is an important quality filter before baiting to better ensure that contigs are matched to the correct taxonomic name. If duplicates are found, the script will BLAST the sequence against a local genbank data and generate a best-guess taxonomy for the match based on retrieved ncbi data for the hits. If a taxonomy file is passed to the script, it can automatically attempt to select the correct taxonomic identity for the duplicate based on taxonomies; if not, or if the -interactive flag is set, the user is presented with each duplicate and the list of options to select from. This process can take some time, so the script has the facility to save its current progress in identifying duplicates and be resumed later. If this option is selected, a file is saved to the current directory and an appropriate message is printed for the user; to resume, the same command should be run again with the addition of the -saved option specifying the path to the resume file. At the end of the first function, the unique barcodes are saved to a file.
+
+	The second function the script undertakes is to carry out baiting, which is performed with a simple BLAST of the contigs file against the barcodes file. These results are then parsed and a taxonomic name applied to contigs where possible according to the following logic:
+	> If only one hit is made, the taxonomic name of this hit is assigned to the contig
+	> Across multiple hits, the mean of the identities for hits from sequences with the same taxonomic name is computed
+	> The taxonomic name with the highest mean identity is assigned to the contig
+If there are no hits for a contig or multiple taxonomic names tie for highest identity no hit is assigned. Multiple log files are output to a folder specified by the -output option. A table of the automatic taxonomic assignments of contigs is output, along with a fasta file containing the contigs with successful taxonomic assignments and with the assignments as sequence headers. The raw baiting BLAST results are output in order to manually validate, select or improve taxonomic assignments.
+
+Usage:
+
+	Basic use:
+	
+	$script -contigs contigs.fa -baits baits.fa -interactive
+
+	With taxonomy file:
+
+	$script -contigs contigs.fa -baits baits.fa -taxonomy taxonomy.csv [-libraries libraries.csv -interactive]
+
+	Resuming a saved process:
+
+	$script -contigs contigs.fa -baits baits.fa -taxonomy taxonomy.csv [-libraries libraries.csv -interactive] -saved baits.savedprogress.log
+
+	All options:
+	
+	$script -contigs contigs.fa -baits baits.fa [-taxonomy taxonomy.csv -libraries libraries.csv] [-interactive] [-saved baits.savedprogress.log] [-outpath dir/] [-verbose] [-namefield] [-threads] [-minid_duplicates n -minlen_duplicates n] [-minid_baiting n -minlen_baiting n] [-prop_taxmatch n]
+
+
+Arguments:
+	
+		  contigs:  Required. Path to contigs fasta file.
+	  	    baits:  Required. Path to baits fasta file.
+	      interactive:  Required if no taxonomy file. Flag to use interactive selection mode for duplicate resolution. Automatically sets verbose.
+
+		 taxonomy:  Optional. Path to taxonomy tabular file
+		libraries:  Optional. Path to libraries tabular file
+		    saved:  Optional. Path to resume saved duplicate resolution session
+
+		   output:  Path to directory in which to save outputs. Default: current directory.
+
+		namefield:  Field number of bait headers (separated by "-", "." and/or "_"to use as taxonomic name. Default: 1.
+	          threads:  Number of threads to use to use for BLAST. Default: 8.
+	 minid_duplicates:  Minimum identity parameter passed to BLAST for blasting bait duplicates. Default: 100.
+	minlen_duplicates:  Minimum length parameter passed to BLAST for blasting bait duplicates. Default: 100.
+	    minid_baiting:  Minimum identity parameter passed to BLAST for blasting contigs to baits. Default: 99.
+	   minlen_baiting:  Minimum length parameter passed to BLAST for blasting contigs to baits. Default: 100.
+	    prop_taxmatch:  Sensitivity parameter for BLAST best-guess taxonomy, 0-1. Default: 0.25. Increase for more conservative guesses.
+
+	          verbose:  Prints useful messages along the way	   
+	             help:  Prints out this helpful message.
+
+USAGE
+#
+######################################################
+
+GetOptions("contigs=s"		=> \$contigfile,
+	   "baits=s"		=> \$baitfile,
+	   "namefield=s"	=> \$parameters{namefield},
+	   "threads=i"		=> \$parameters{threads},
+	   "minid_duplicates=s"	=> \$parameters{dupid},
+	   "minid_baiting=s"	=> \$parameters{baitid},
+	   "minlen_duplicates=s"=> \$parameters{duplength},
+	   "minlen_baiting=s"	=> \$parameters{baitlength},
+	   "prop_taxmatch=s"	=> \$parameters{taxmin},
+	   "taxonomy=s"		=> \$taxonomyfile,
+	   "libraries=s"	=> \$librariesfile,
+	   "saved=s"		=> \$savedfile,
+	   "output=s"		=> \$outpath,
+	   "interactive"	=> \$interactive,
+	   "verbose"		=> \$verbose,
+	   "help"		=> \$help) or die "Error: Incorrect options, try \"$script --help\" for more information.\n";
+
+print "$usage\n" and exit if($help);
+
+#
+# Error catches
+#
+
+die "Error: missing bait fasta\n" unless($baitfile);
+die "Error: missing contig fasta\n" unless($contigfile);
+die "Error: cannot run automatically without taxonomy information, please either supply taxonomy file or run interactively\n" unless($interactive or $taxonomyfile);
+
+#
+# Startup messages and input parsing
+#
+
+# If interactive set verbose to be true whether or not flagged as input
+$verbose = 1 if $interactive;
+
+print "This is $script version $version.\n" if $verbose;
+
+# Read in fastas and report
+my %baits = read_fasta($baitfile);
+my %contigs = read_fasta($contigfile);
+printf "Loaded %d bait sequences and %d contig sequences\n", scalar keys %baits, scalar keys %contigs if $verbose;
+
+# Read in other data and report
+my %taxonomy = read_taxonomy($taxonomyfile) if $taxonomyfile;
+printf "Loaded %d bait taxonomies\n", scalar keys %taxonomy if($taxonomyfile and $verbose);
+my %libraries = read_libraries($librariesfile) if $librariesfile;
+printf "Loaded %d bait library allocations\n",scalar keys %libraries if($librariesfile and $verbose);
+
+# Parse names of baits
+my %baitnames = map { $_ => 1} (keys %taxonomy, keys %libraries);
+my $nameconv = parse_baitnames(\%baits,\%baitnames,\%parameters,$verbose);
+print "Matched bait ids with names in supplementary data\n" if($verbose and (%taxonomy or %libraries));
+
+#
+# Check for duplicate barcodes and delete from baits #TODO: synonymise libraries?
+#
+
+print "\nChecking for duplicate barcodes\n" if $verbose;
+
+# Blast for any duplicate bait sequences, or retrieve saved output
+my $dupsets;
+if($savedfile){
+	$dupsets = retrieve($savedfile);
+	print "Loaded saved progress, resuming.\n" if $verbose;
+} else {
+	($dupsets) = blastfordups($baitfile, $nameconv,\%taxonomy,\%baits,\%parameters,$verbose);
+	
+	printf "%d sets of duplicates found.\n",scalar keys %$dupsets if $verbose;
+	store $dupsets, "$outpath/$baitfile.savedprogress.log";
+	print "Saving progress so far, run $script again using \"-saved $outpath/$baitfile.savedprogress.log\" to resume from this point if needed.\n";
+}
+
+# Resolve matches
+open my $synlog, '>', "$outpath/$script.duplicate.log" or die "Can't write to duplicate log\n";
+print $synlog "set,duplicate,sequenceid,length", %taxonomy ? ",name,taxonomyblast,suppliedtaxonomy" : "",",action\n";
+
+foreach my $set (sort keys %$dupsets){
+	#Check to see if there's a stored decision
+	my $selection = ${$dupsets}{$set}{selection} or undef;
+	
+	# Decide on action
+		my @taxmatchsort = sort { ${$dupsets}{$set}{set}{$b}{taxonomymatch} <=> ${$dupsets}{$set}{set}{$a}{taxonomymatch} } keys %{${$dupsets}{$set}{set}} if(%taxonomy);
+	if($verbose){
+		print "\nDuplicate set $set\n";
+		print "BLAST best-guess taxonomy:",scalar @{${$dupsets}{$set}{taxonomy}} > 3 ? join(";",@{${$dupsets}{$set}{taxonomy}}[-4..-1]) : join(";",@{${$dupsets}{$set}{taxonomy}}),"\n";
+		print "Sequence options:\n";
+		foreach my $dup (sort keys %{${$dupsets}{$set}{set}}){
+			print "\t$dup. ${$dupsets}{$set}{set}{$dup}{id}\n";
+			print "\t\tName: ${$dupsets}{$set}{set}{$dup}{name}\n" if(%taxonomy or %libraries);
+			print "\t\tTaxonomy: ",join("; ",@{${$dupsets}{$set}{set}{$dup}{taxonomy}}),"\n" if(%taxonomy);
+			print "\t\tSequence length: ${$dupsets}{$set}{set}{$dup}{size}bp\n"
+		}
+	}
+	
+	#print Dumper ${$dupsets}{$set};
+	
+	if($interactive or $selection){
+		if(!$selection){
+			print "Please enter number corresponding to sequence to use, or:\n\t'x' to delete entire set of duplicates\n\t'k' to keep entire set of duplicates\n\t'q' to save progress and quit\n";
+			print "(Based on taxonomy, I think number $taxmatchsort[0] might be the best, but what do I know?)\n" if(%taxonomy and ${$dupsets}{$set}{set}{$taxmatchsort[0]}{taxonomymatch}>${$dupsets}{$set}{set}{$taxmatchsort[1]}{taxonomymatch});
+			while(!$selection){
+				print "Enter value:";
+				$selection = <STDIN>;
+				chomp $selection;
+				unless(exists(${$dupsets}{$set}{set}{$selection}) or $selection eq "x" or $selection eq "q" or $selection eq "k"){
+					print "Input \'$selection\' not recognised, please try again:\n";
+					undef($selection);
+				}
+			}
+			print "OK, ";
+		} else {
+			print "Saved selection found, " if $verbose;
+		}
+		if($selection eq 'q'){
+			store $dupsets, "$outpath/$baitfile.savedprogress.log";
+			print "quitting here. Progress is saved, when you wish to resume, run $script again using \"-saved $outpath/$baitfile.savedprogress.log\" and you will resume duplicate decisions at this sequence.\n";
+			exit;
+		} elsif($selection eq 'x'){
+			print "deleting entire set of duplicates\n" if $verbose;
+		} elsif($selection eq 'k'){
+			print "keeping entire set of duplicates\n" if $verbose;
+		} else {
+			print "using sequence ${$dupsets}{$set}{set}{$selection}{id}\n" if $verbose;
+		}
+		sleep 1;
+	} else {
+		if(${$dupsets}{$set}{set}{$taxmatchsort[0]}{taxonomymatch} > 0 and ${$dupsets}{$set}{set}{$taxmatchsort[0]}{taxonomymatch}>${$dupsets}{$set}{set}{$taxmatchsort[1]}{taxonomymatch}){
+			print "Sequence $taxmatchsort[0] has clearly best taxonomy match, selecting this sequence\n" if $verbose;
+			$selection = $taxmatchsort[0];
+		} else {
+			print "No sequences have distinct taxonomy match, deleting entire set of duplicates\n" if $verbose;
+			$selection = 'x';
+		}
+	}
+	${$dupsets}{$set}{selection} = $selection;
+	
+	# Propagate action
+	my @deleteseqs;
+	foreach my $dup (keys %{${$dupsets}{$set}{set}}){
+		print $synlog "$set,$dup,${$dupsets}{$set}{set}{$dup}{id},${$dupsets}{$set}{set}{$dup}{size}";
+		print $synlog "${$dupsets}{$set}{set}{$dup}{name},",join(";",@{${$dupsets}{$set}{taxonomy}}),join("; ",@{${$dupsets}{$set}{set}{$dup}{taxonomy}}) if(%taxonomy);
+		
+		if($selection eq "k"){
+			print $synlog ",kept\n";
+		} elsif($dup eq $selection){
+			print $synlog ",selected\n";
+		} else {
+			print $synlog ",deleted\n";
+			push @deleteseqs,${$dupsets}{$set}{set}{$dup}{id};
+		}
+	}
+	delete @baits{@deleteseqs};
+
+
+}
+close $synlog;
+
+
+open my $OUTbaits, '>', "$outpath/$script.baits.uniques.fa" or die "Can't write unique baits to fasta\n";
+foreach my $id (keys %baits){
+	print $OUTbaits ">$id\n$baits{$id}\n";
+}
+close $OUTbaits;
+
+printf "Duplicate resolution complete, %d baits remain\n",scalar keys %baits if $verbose;
+
+#
+# Do baiting
+#
+
+print "\nRunning BLAST to bait contigs with barcodes\n" if $verbose;
+my $baitresult = blasttobait(\%baits,\%contigs,$outpath,\%parameters,$verbose);
+printf "%d of %d contigs had at least one match\n", scalar keys %$baitresult, scalar keys %contigs if $verbose;
+
+# Process and write results
+
+print "Processing and writing results\n\n" if $verbose;
+open my $baitlog, '>', "$outpath/$script.baiting.final.log";
+print $baitlog "contigid,nbaitmatches,baitname,baitid,criterion\n";
+open my $OUTctgs, '>', "$outpath/contigs.baited.fa";
+
+foreach my $ctgid (keys %contigs){
+	#print "Processing contig $ctgid:\n" if $verbose;
+	my $nresults = scalar keys %{${$baitresult}{$ctgid}};
+	#print "\t$nresults baits match, " if $verbose;
+	my $selectid;
+	my $criterion;
+	my $selectname;
+	if($nresults == 0){
+		#print "no identification could be made\n" if $verbose;
+		$criterion = "nobaitmatches";
+	} elsif($nresults ==1) {
+		$selectid = (keys  %{${$baitresult}{$ctgid}})[0];
+		#print "identified to $selectid\n" if $verbose;
+		$criterion = "onlymatch";
+		$selectname = ${$nameconv}{$selectid};
+	} else {
+		#print "selecting match according to identity..." if $verbose;
+		my %matchnames;
+		foreach my $id (keys %{${$baitresult}{$ctgid}}){
+			my $name = ${$nameconv}{$id};
+			$matchnames{$name}{repid} = $id;
+			$matchnames{$name}{nseqs}++;
+			$matchnames{$name}{sumid} += ${$baitresult}{$ctgid}{$id}{identity};
+			$matchnames{$name}{totseqs} = scalar (grep {/$name/} values %{$nameconv});
+		}
+		foreach my $name (keys %matchnames){
+			$matchnames{$name}{meanid} = $matchnames{$name}{sumid}/$matchnames{$name}{nseqs};
+			$matchnames{$name}{propseqs} = $matchnames{$name}{nseqs}/$matchnames{$name}{totseqs};
+		}
+		
+		if(keys %matchnames > 1){
+			my @baitname_sort = sort { $matchnames{$a}{meanid} <=> $matchnames{$b}{meanid} || $matchnames{$a}{propseqs} <=> $matchnames{$b}{propseqs} } keys %matchnames;
+		
+			if($matchnames{$baitname_sort[0]}{meanid} > $matchnames{$baitname_sort[1]}{meanid} and $matchnames{$baitname_sort[0]}{propseqs} > $matchnames{$baitname_sort[1]}{propseqs}){
+				#print "top name match found: $baitname_sort[0]\n" if $verbose;
+				if($matchnames{$baitname_sort[0]}{nseqs} == 1){
+					$selectid = $matchnames{$baitname_sort[0]}{repid};
+					$criterion = "topidentity";
+					$selectname = $baitname_sort[0];
+				} else {
+					$criterion = "topnamebatch";
+					$selectname = $baitname_sort[0];
+				}
+			} else {
+				#print "top name match could not be distinguished, equally high matching sequences found with different names\n" if $verbose;
+				$criterion = "nodistinctmatch - see blast results to make manual decision";
+			}
+		} else {
+			$selectname = (keys %matchnames)[0];
+			#print "identified to $selectname\n" if $verbose;
+			$criterion = "onlynamematch";
+		}
+		$selectid = "$matchnames{$selectname}{nseqs} of $matchnames{$selectname}{totseqs} baits of $selectname, mean identity $matchnames{$selectname}{meanid}" if(!$selectid and $selectname);
+	}
+	print $baitlog "$ctgid,$nresults,",$selectname ? "$selectname," : "NA,", $selectid ? "$selectid," : "NA," ,"$criterion\n";
+	print $OUTctgs ">$ctgid";
+	if($selectname){
+		print $OUTctgs "|$selectname|";
+		print $OUTctgs "|",$criterion = "topnamebatch" ? "[multiplebaits]" : $selectid;
+		print $OUTctgs "|",%taxonomy ? $taxonomy{$selectname} : "";
+	}
+	print $OUTctgs "\n$contigs{$ctgid}\n";
+}
+close $baitlog;
+close $OUTctgs;
+
+print "\n$script completed successfully\n";
+
+exit;
+
+sub blasttobait{
+	my ($baits,$contigs,$outpath,$parameters,$verbose) = @_;
+	# Create blast database
+	print "Creating temporary BLAST database and writing temporary contigs\n" if $verbose;
+	open my $nwbaitfa, '>', "tempblastdb.fa" or die "Couldn't write to temporary fasta for BLAST database";
+	foreach my $id (keys %$baits){
+		print $nwbaitfa ">$id\n${$baits}{$id}\n";
+	}
+	close $nwbaitfa;
+	system("makeblastdb -in tempblastdb.fa -title tempblastdb -dbtype nucl -out tempblastdb > /dev/null 2>&1");
+	
+	open my $tmpctgfa, '>', "tempblastctg.fa" or die "Couldn't write to temporary contigsfile";
+	foreach my $id (keys %$contigs){
+		print $tmpctgfa ">$id\n${$contigs}{$id}\n";
+	}
+	close $tmpctgfa;
+	
+	# Run blast
+	print "BLASTing\n" if $verbose;
+	my $blastcmd = "blastn -query tempblastctg.fa -db tempblastdb -num_threads ${$parameters}{threads} -max_target_seqs 10 -outfmt \"6 qseqid sseqid pident length evalue\"";
+	my $blastdump = qx(bash -c '$blastcmd') or die "Can't BLAST to bait\n";
+	
+	#Parse blast output
+	print "Parsing BLAST results\n" if $verbose;
+	my @blastresults = split /\n/,$blastdump;
+	
+	printf "Total of %d BLAST results\n",scalar @blastresults if $verbose;
+	my %results;
+	
+	open my $blastlog,'>',"$outpath/$script.baiting.blast.log";
+	print $blastlog "qseqid\tsseqid\tpident\tlength\tevalue\n";
+	
+	foreach my $row (@blastresults){
+		print $blastlog "$row\n";
+		my ($query,$result, $ident,$length,$evalue) = split /[\s\t]/,$row;
+		if($ident >= ${$parameters}{baitid} and $length >= ${$parameters}{baitlength}){ 
+			$results{$query}{$result} = {
+				'identity' => $ident,
+				'length'   => $length,
+			};
+		}
+	}
+	close $blastlog;
+	system("rm tempblast*");
+	return \%results;
+}
+
+sub blastfordups{
+	my ($baitfile,$nameconv,$taxonomy,$baits,$parameters,$verbose) = @_;
+	# Create blast database using bait fasta
+	print "Creating temporary BLAST database\n" if $verbose;
+	system("makeblastdb -in $baitfile -title tempblastdb -dbtype nucl -out tempblastdb > /dev/null 2>&1");
+
+	# Blast fasta against itself and recieve output
+	print "BLASTing\n" if $verbose;
+	my $blastcmd = "blastn -query $baitfile -db tempblastdb -num_threads ${$parameters}{threads} -max_target_seqs 10 -outfmt \"6 qseqid sseqid length pident evalue\""; 
+	my $blastdump = qx(bash -c '$blastcmd') or die "Can't BLAST duplicates\n";
+
+	# Parse blast output
+	print "Parsing BLAST output\n" if $verbose;
+	my @blastresults = split /\n/,$blastdump;
+	my %identical;
+	foreach my $row (@blastresults){
+		my ($query,$result,$length, $ident,$evalue) = split /[\s\t]/,$row;
+		if($ident >= ${$parameters}{dupid} and $length >= ${$parameters}{duplength} and $query ne $result){
+			if(exists($identical{$result})){
+				$identical{$result}{$query} = 1;
+			} else {
+				$identical{$query}{$result} = 1;
+			}
+		}
+	}
+	
+	#Generate detailed report hash
+	print "Analysing BLAST output (this may take some time!)\n" if $verbose;
+	my %dupseqs;
+	my $nset;
+	foreach my $setid (keys %identical){ # Go through each set and create a hash containing details of each sequence
+		$nset++;
+		printf "Duplicate set $nset of %d, contains:\n",scalar keys %identical if $verbose;
+		my %set;
+		my @seqs;
+		my $ndup = 0;
+		foreach my $id ($setid,keys %{$identical{$setid}}){ 
+			$ndup++;
+			$set{$ndup} = {
+				'id'		=> $id,
+				'name'		=> ${$nameconv}{$id},
+				'sequence'	=> ${$baits}{$id},
+				'size'		=> length(${$baits}{$id})
+			};
+			push @seqs,${$baits}{$id};
+			print "\t$id\n" if $verbose;
+			$set{$ndup}{taxonomy} = ${$taxonomy}{${$nameconv}{$id}} if %$taxonomy;
+		}
+		print "$ndup total sequences\n" if $verbose;
+
+		print "BLASTing to NCBI for best-guess taxonomy\n" if $verbose;
+		my @taxonomylongest = taxonomyblast(\@seqs,$parameters,$verbose); # Blast for best-guess taxonomy
+		if(%$taxonomy and @taxonomylongest){
+			print "Calculating taxonomy score\n" if $verbose;
+			my %taxlonghash = map { $_ => 1 } @taxonomylongest;
+			print Dumper \%taxlonghash;
+			foreach my $i (keys %set){
+				my $score = 0;
+				my $ntaxa = scalar @{$set{$i}{taxonomy}};
+				#print "Sequence $i has $ntaxa taxonomic ranks:\n" if $verbose;
+				if($ntaxa > 0){
+					my $matches = 0;
+					foreach my $taxon (@{$set{$i}{taxonomy}}){
+						#print "\tIs $taxon in blast best-guess?\n";
+						$matches++ if(exists($taxlonghash{$taxon}));
+						#print "\tCurrent matches = $matches\n";
+					}
+					#print "Total matches = $matches\n";
+					$score = $matches/$ntaxa;
+					#print "Score is $score\n";
+				}
+				$set{$i}{taxonomymatch} = $score;
+			}
+		}
+		$dupseqs{$nset}{taxonomy} = @taxonomylongest ? [@taxonomylongest] : [" none"];
+		$dupseqs{$nset}{set} = \%set;
+	}
+	system("rm tempblastdb*");
+	return \%dupseqs;
+}
+
+sub taxonomyblast{
+	my ($seqs,$parameters,$verbose) = @_;
+	my $blastdump;
+	foreach my $i (0..scalar(@$seqs)-1){
+		printf "BLASTing sequence %d\n", $i+1 if $verbose;
+		my $blastcmd = "blastn -query <(echo -e \">sample\\n@$seqs[$i]\") -db /dh/blastdb/nt -num_threads ${$parameters}{threads} -max_target_seqs 25 -outfmt \"6 sacc bitscore\"";
+		$blastdump .= qx(bash -c '$blastcmd');
+	}
+	my @out;
+	if($blastdump){
+		print "Retrieving taxonomy information\n" if $verbose;
+		my @accessions = ($blastdump =~ /(?:^|\n)(\w+)/g);
+		my $accessionstring = join ",",@accessions;
+		print $accessionstring,"\n";
+		my $nucdump = get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=$accessionstring&retmode=xml&rettype=fasta");
+		my $taxidstring = join ",",($nucdump =~ /<TSeq_taxid>(.*)<\/TSeq_taxid/g);
+		print $taxidstring,"\n";
+		my $taxdump = get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=taxonomy&id=$taxidstring");
+		my @lineages = ($taxdump =~ /<Lineage>(.*)<\/Lineage>/g);
+		my @linaoa;
+		foreach my $i (0..$#lineages){
+			$linaoa[$i] = [ split /;\s/,$lineages[$i] ];
+		}
+	
+		my $ti = -1;
+		my @htind = (1..$#linaoa);
+		while($ti < scalar @{$linaoa[0]}-1){
+			$ti++;
+			@htind = grep { $linaoa[$_][$ti] =~ $linaoa[0][$ti] } @htind;
+			$ti-- and last if($#htind/$#linaoa <= ${$parameters}{taxmin});
+		}
+		@out = @{$linaoa[0]}[0..$ti];
+	} else {
+		print "No BLAST hits for sequence\n" if $verbose;
+	}
+	return @out;
+}
+
+sub parse_baitnames {
+	my ($baits, $names,$parameters,$verbose) = @_;
+	my %nameconv;
+	my %unmatchednames;
+	foreach my $id (keys %$baits){
+		if(%$names){
+			my @matches = grep {$id =~ /$_/} keys %$names;
+			die "Error: cannot match $id to a name" unless(@matches);
+			die "Error: $id matches multiple names: ",join(", ",@matches) if($#matches>0); ##TODO: if necessary, include error catch if name not in both taxonomy and libraries
+			$nameconv{$id} = $matches[0];
+		} else {
+			$nameconv{$id} = (split /[_.-]/,$id)[${$parameters}{namefield}-1];
+		}
+	}
+	##TODO: Report number of names that do not match to any ID (note, multiple IDs may match to same name if multiple bait loci for same species)
+	return \%nameconv;
+}
+
+sub read_taxonomy {
+	my ($filein) = @_;
+	my %taxonomy;
+	open my $INtx, '<', $filein or die "Couldn't open $filein\n";
+	while(my $row = <$INtx>){
+		chomp $row;
+		my @line = split /[,;\t]/,$row;
+		$taxonomy{$line[0]} = [ @line[1..$#line] ];
+	}
+	close $INtx;
+	return %taxonomy;
+}
+
+sub read_libraries {
+	my ($filein) = @_;
+	my %libraries;
+	open my $INlb, '<', $filein or die "Couldn't open $filein\n";
+	while(my $row = <$INlb>){
+		chomp $row;
+		my @line = split /[,\t]/,$row;
+		$libraries{$line[0]} = $line[2];
+	}
+	close $INlb;
+	return %libraries;
+}
+
+
+sub read_fasta {
+	my ($fapathin) = @_;
+	my %fasta;
+	my $id;
+	open my $fa_in, '<', $fapathin or die "Couldn't open $fapathin\n";
+	while(my $row = <$fa_in>){
+		chomp $row;
+		$row =~ s/\x0D//g;
+		if($row =~ /^>(.+)$/){
+			if(exists $fasta{$1}){
+				warn "Duplicate sequence names found in $fapathin: $1 - appending number\n" ;
+				$id = "$1_1";
+				while(exists $fasta{$id}){
+					$id =~ s/_(\d+)$//;
+					$id = sprintf "$id\_%d",$1+1;
+				}
+			} else {
+				$id = $1;
+			}
+			die "Error, spaces found in sequence name \"$id\" in $fapathin\n" if($id =~ /\s/);
+		} elsif($row =~ /^[ATCGUWSMKRYBDHVNatcguwsmkrybdhvn-]+$/){
+			$fasta{$id} .= $row;
+		} else { die "Couldn't read fasta format in $fapathin" };
+	}
+	close $fa_in;
+	return %fasta;
+}
+
+

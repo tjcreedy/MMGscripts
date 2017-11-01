@@ -1,0 +1,89 @@
+#!/usr/bin/perl
+#By Thomas J Creedy, thomas@tjcreedy.co.uk 
+
+use warnings;
+use strict;
+use Getopt::Long;
+use Data::Dumper;
+use File::Basename;
+
+my @fastqs;
+my @blasts;
+my $help;
+
+my $script = basename($0, ());
+
+########################################################
+# USAGE
+#
+my $usage =<<USAGE;
+
+Description:
+
+	$script takes one or more fastq files and removes any sequences without matches in one or more blast output files. Generally if more than one file is passed they will be the forward and reverse reads of a single library, and the blast output files will be those produced by blasting each of these reads files separately. In such a case, this script removes the need to concatenate two blast files.
+	A separate fastq is output for each input fastq. Note that in theory this could be used to batch through multiple different libraries if all sequences had unique names, despite all blast files being internally concatenated. However this is untested and unadvised.
+
+Usage:
+
+	$script --fastq <in.fq> [--fastq <in2.fq>] --blast <in.txt> [--blast <in2.txt]
+
+Arguments:
+
+	  fastq:  The file path of a fastq to filter. Each fastq requires a separate --fastq argument.
+	  blast:  The file path of a blast output, tab-delimited, in which the first column is query names - as output by blast format 6. Each blast output requires a separate --fastq argument.
+	   help:  Prints out this helpful message.
+
+USAGE
+#
+######################################################
+
+GetOptions("fastq=s"		=> \@fastqs,
+	   "blast=s"		=> \@blasts,
+	   "help"		=> \$help) or die "Error getting options\n";
+
+print $usage and exit if $help;
+
+die "\nError: $script requires at least one fastq and at least one blast output.\n\n" unless(@fastqs and @blasts);
+
+# Read in blast file(s)
+my %headers_passed;
+foreach my $blastpath (@blasts){
+	open my $blout, '<', $blastpath or die "Cannot open $blastpath\n";
+	while(my $line = <$blout>){
+		chomp $line;
+		$line =~ m/^(\S+)\s/;
+		$headers_passed{$1}=1;
+	}
+	close $blout;
+}
+
+foreach my $fastqpath (@fastqs){
+	my ($nsequences,$nprinted) = (0,0);
+	open my $fqin, '<', $fastqpath or die "Cannot read $fastqpath\n";
+	
+	my $name = fileparse($fastqpath,(".fq",".fastq"));
+	print $name,"\n";
+	open my $fqout, '>', "$name.filtered.fq" or die "Cannot write to $name.filtered.fq\n";
+	
+	my $match;
+	while(my $line = <$fqin>){
+		if($line =~ /^@((?:[A-Z0-9-]+:)+[A-Z0-9-]+)(\s(?:[A-Z0-9-]+:)+[A-Z0-9-]+)?$/){
+			$nsequences++;
+			if(exists $headers_passed{$1}){
+				$match++;
+				print $fqout $line;
+				$nprinted++;
+			} else {
+				undef($match);
+			}
+		} elsif($match) {
+			print $fqout $line;
+		}
+	}
+	print "$nprinted of $nsequences sequences passed filter for $fastqpath\n";
+	close $fqin;
+	close $fqout;
+	
+}
+
+exit;
