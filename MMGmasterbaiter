@@ -10,10 +10,11 @@ use List::Util qw(sum);
 use Data::Dumper;
 use Storable;
 
-my $version = "0.1.1"; #31/10/17
+my $version = "0.1.2"; #1/11/17
 
 my ($contigfile,$baitfile,$taxonomyfile,$librariesfile,$savedfile);
 my $interactive;
+my $dupcheck;
 my $outpath = ".";
 my %parameters = (
 		'threads' => 8,
@@ -72,6 +73,7 @@ Arguments:
 		  contigs:  Required. Path to contigs fasta file.
 	  	    baits:  Required. Path to baits fasta file.
 	      interactive:  Required if no taxonomy file. Flag to use interactive selection mode for duplicate resolution. Automatically sets verbose.
+		 dupcheck:  Optional. Flag to carry out duplicate checking
 
 		 taxonomy:  Optional. Path to taxonomy tabular file
 		libraries:  Optional. Path to libraries tabular file
@@ -96,6 +98,7 @@ USAGE
 
 GetOptions("contigs=s"		=> \$contigfile,
 	   "baits=s"		=> \$baitfile,
+	   "dupcheck"		=> \$dupcheck,
 	   "namefield=s"	=> \$parameters{namefield},
 	   "threads=i"		=> \$parameters{threads},
 	   "minid_duplicates=s"	=> \$parameters{dupid},
@@ -153,112 +156,117 @@ print "Matched bait ids with names in supplementary data\n" if($verbose and (%ta
 print "\nChecking for duplicate barcodes\n" if $verbose;
 
 # Blast for any duplicate bait sequences, or retrieve saved output
-my $dupsets;
-my $savedfilename = "$outpath/$script".timestamp().".savedprogress.log";
-if($savedfile){
-	$dupsets = retrieve($savedfile);
-	print "Loaded saved progress, resuming.\n" if $verbose;
-} else {
-	($dupsets) = blastfordups($baitfile, $nameconv,\%taxonomy,\%baits,\%parameters,$verbose);
-	
-	printf "%d sets of duplicates found.\n",scalar keys %$dupsets if $verbose;
-	store $dupsets, $savedfilename;
-	print "Saving progress so far, run $script again using \"-saved $savedfilename\" to resume from this point if needed.\n";
-}
-
-# Resolve matches
-open my $synlog, '>', "$outpath/$script.duplicate.log" or die "Can't write to duplicate log\n";
-print $synlog "set,duplicate,sequenceid,length", %taxonomy ? ",name,taxonomyblast,suppliedtaxonomy" : "",",action\n";
-
-foreach my $set (sort keys %$dupsets){
-	#Check to see if there's a stored decision
-	my $selection = ${$dupsets}{$set}{selection} or undef;
-	
-	# Decide on action
-		my @taxmatchsort = sort { ${$dupsets}{$set}{set}{$b}{taxonomymatch} <=> ${$dupsets}{$set}{set}{$a}{taxonomymatch} } keys %{${$dupsets}{$set}{set}} if(%taxonomy);
-	if($verbose){
-		print "\nDuplicate set $set\n";
-		print "BLAST best-guess taxonomy:",scalar @{${$dupsets}{$set}{taxonomy}} > 3 ? join(";",@{${$dupsets}{$set}{taxonomy}}[-4..-1]) : join(";",@{${$dupsets}{$set}{taxonomy}}),"\n";
-		print "Sequence options:\n";
-		foreach my $dup (sort keys %{${$dupsets}{$set}{set}}){
-			print "\t$dup. ${$dupsets}{$set}{set}{$dup}{id}\n";
-			print "\t\tName: ${$dupsets}{$set}{set}{$dup}{name}\n" if(%taxonomy or %libraries);
-			print "\t\tTaxonomy: ",join("; ",@{${$dupsets}{$set}{set}{$dup}{taxonomy}}),"\n" if(%taxonomy);
-			print "\t\tSequence length: ${$dupsets}{$set}{set}{$dup}{size}bp\n"
-		}
-	}
-	
-	#print Dumper ${$dupsets}{$set};
-	
-	if($interactive or $selection){
-		if(!$selection){
-			print "Please enter number corresponding to sequence to use, or:\n\t'x' to delete entire set of duplicates\n\t'k' to keep entire set of duplicates\n\t'q' to save progress and quit\n";
-			print "(Based on taxonomy, I think number $taxmatchsort[0] might be the best, but what do I know?)\n" if(%taxonomy and ${$dupsets}{$set}{set}{$taxmatchsort[0]}{taxonomymatch}>${$dupsets}{$set}{set}{$taxmatchsort[1]}{taxonomymatch});
-			while(!$selection){
-				print "Enter value:";
-				$selection = <STDIN>;
-				chomp $selection;
-				unless(exists(${$dupsets}{$set}{set}{$selection}) or $selection eq "x" or $selection eq "q" or $selection eq "k"){
-					print "Input \'$selection\' not recognised, please try again:\n";
-					undef($selection);
-				}
-			}
-			print "OK, ";
-		} else {
-			print "Saved selection found, " if $verbose;
-		}
-		if($selection eq 'q'){
-			store $dupsets, "$outpath/$baitfile.savedprogress.log";
-			print "quitting here. Progress is saved, when you wish to resume, run $script again using \"-saved $outpath/$baitfile.savedprogress.log\" and you will resume duplicate decisions at this sequence.\n";
-			exit;
-		} elsif($selection eq 'x'){
-			print "deleting entire set of duplicates\n" if $verbose;
-		} elsif($selection eq 'k'){
-			print "keeping entire set of duplicates\n" if $verbose;
-		} else {
-			print "using sequence ${$dupsets}{$set}{set}{$selection}{id}\n" if $verbose;
-		}
-		sleep 1;
+if($dupcheck){
+	my $dupsets;
+	my $savedfilename = "$outpath/$script".timestamp().".savedprogress.log";
+	if($savedfile){
+		$dupsets = retrieve($savedfile);
+		print "Loaded saved progress, resuming.\n" if $verbose;
 	} else {
-		if(${$dupsets}{$set}{set}{$taxmatchsort[0]}{taxonomymatch} > 0 and ${$dupsets}{$set}{set}{$taxmatchsort[0]}{taxonomymatch}>${$dupsets}{$set}{set}{$taxmatchsort[1]}{taxonomymatch}){
-			print "Sequence $taxmatchsort[0] has clearly best taxonomy match, selecting this sequence\n" if $verbose;
-			$selection = $taxmatchsort[0];
-		} else {
-			print "No sequences have distinct taxonomy match, deleting entire set of duplicates\n" if $verbose;
-			$selection = 'x';
-		}
-	}
-	${$dupsets}{$set}{selection} = $selection;
-	
-	# Propagate action
-	my @deleteseqs;
-	foreach my $dup (keys %{${$dupsets}{$set}{set}}){
-		print $synlog "$set,$dup,${$dupsets}{$set}{set}{$dup}{id},${$dupsets}{$set}{set}{$dup}{size}";
-		print $synlog "${$dupsets}{$set}{set}{$dup}{name},",join(";",@{${$dupsets}{$set}{taxonomy}}),join("; ",@{${$dupsets}{$set}{set}{$dup}{taxonomy}}) if(%taxonomy);
+		($dupsets) = blastfordups($baitfile, $nameconv,\%taxonomy,\%baits,\%parameters,$verbose);
 		
-		if($selection eq "k"){
-			print $synlog ",kept\n";
-		} elsif($dup eq $selection){
-			print $synlog ",selected\n";
-		} else {
-			print $synlog ",deleted\n";
-			push @deleteseqs,${$dupsets}{$set}{set}{$dup}{id};
-		}
+		printf "%d sets of duplicates found.\n",scalar keys %$dupsets if $verbose;
+		store $dupsets, $savedfilename;
+		print "Saving progress so far, run $script again using \"-saved $savedfilename\" to resume from this point if needed.\n";
 	}
-	delete @baits{@deleteseqs};
 
+	# Resolve matches
+	open my $synlog, '>', "$outpath/$script.duplicate.log" or die "Can't write to duplicate log\n";
+	print $synlog "set,duplicate,sequenceid,length", %taxonomy ? ",name,taxonomyblast,suppliedtaxonomy" : "",",action\n";
+
+	foreach my $set (sort keys %$dupsets){
+		#Check to see if there's a stored decision
+		my $selection = ${$dupsets}{$set}{selection} or undef;
+		
+		# Decide on action
+			my @taxmatchsort = sort { ${$dupsets}{$set}{set}{$b}{taxonomymatch} <=> ${$dupsets}{$set}{set}{$a}{taxonomymatch} } keys %{${$dupsets}{$set}{set}} if(%taxonomy);
+		if($verbose){
+			print "\nDuplicate set $set\n";
+			print "BLAST best-guess taxonomy:",scalar @{${$dupsets}{$set}{taxonomy}} > 3 ? join(";",@{${$dupsets}{$set}{taxonomy}}[-4..-1]) : join(";",@{${$dupsets}{$set}{taxonomy}}),"\n";
+			print "Sequence options:\n";
+			foreach my $dup (sort keys %{${$dupsets}{$set}{set}}){
+				print "\t$dup. ${$dupsets}{$set}{set}{$dup}{id}\n";
+				print "\t\tName: ${$dupsets}{$set}{set}{$dup}{name}\n" if(%taxonomy or %libraries);
+				print "\t\tTaxonomy: ",join("; ",@{${$dupsets}{$set}{set}{$dup}{taxonomy}}),"\n" if(%taxonomy);
+				print "\t\tSequence length: ${$dupsets}{$set}{set}{$dup}{size}bp\n"
+			}
+		}
+		
+		#print Dumper ${$dupsets}{$set};
+		
+		if($interactive or $selection){
+			if(!$selection){
+				print "Please enter number corresponding to sequence to use, or:\n\t'x' to delete entire set of duplicates\n\t'k' to keep entire set of duplicates\n\t'q' to save progress and quit\n";
+				print "(Based on taxonomy, I think number $taxmatchsort[0] might be the best, but what do I know?)\n" if(%taxonomy and ${$dupsets}{$set}{set}{$taxmatchsort[0]}{taxonomymatch}>${$dupsets}{$set}{set}{$taxmatchsort[1]}{taxonomymatch});
+				while(!$selection){
+					print "Enter value:";
+					$selection = <STDIN>;
+					chomp $selection;
+					unless(exists(${$dupsets}{$set}{set}{$selection}) or $selection eq "x" or $selection eq "q" or $selection eq "k"){
+						print "Input \'$selection\' not recognised, please try again:\n";
+						undef($selection);
+					}
+				}
+				print "OK, ";
+			} else {
+				print "Saved selection found, " if $verbose;
+			}
+			if($selection eq 'q'){
+				store $dupsets, "$outpath/$baitfile.savedprogress.log";
+				print "quitting here. Progress is saved, when you wish to resume, run $script again using \"-saved $outpath/$baitfile.savedprogress.log\" and you will resume duplicate decisions at this sequence.\n";
+				exit;
+			} elsif($selection eq 'x'){
+				print "deleting entire set of duplicates\n" if $verbose;
+			} elsif($selection eq 'k'){
+				print "keeping entire set of duplicates\n" if $verbose;
+			} else {
+				print "using sequence ${$dupsets}{$set}{set}{$selection}{id}\n" if $verbose;
+			}
+			sleep 1;
+		} else {
+			if(${$dupsets}{$set}{set}{$taxmatchsort[0]}{taxonomymatch} > 0 and ${$dupsets}{$set}{set}{$taxmatchsort[0]}{taxonomymatch}>${$dupsets}{$set}{set}{$taxmatchsort[1]}{taxonomymatch}){
+				print "Sequence $taxmatchsort[0] has clearly best taxonomy match, selecting this sequence\n" if $verbose;
+				$selection = $taxmatchsort[0];
+			} else {
+				print "No sequences have distinct taxonomy match, deleting entire set of duplicates\n" if $verbose;
+				$selection = 'x';
+			}
+		}
+		${$dupsets}{$set}{selection} = $selection;
+		
+		# Propagate action
+		my @deleteseqs;
+		foreach my $dup (keys %{${$dupsets}{$set}{set}}){
+			print $synlog "$set,$dup,${$dupsets}{$set}{set}{$dup}{id},${$dupsets}{$set}{set}{$dup}{size}";
+			print $synlog "${$dupsets}{$set}{set}{$dup}{name},",join(";",@{${$dupsets}{$set}{taxonomy}}),join("; ",@{${$dupsets}{$set}{set}{$dup}{taxonomy}}) if(%taxonomy);
+			
+			if($selection eq "k"){
+				print $synlog ",kept\n";
+			} elsif($dup eq $selection){
+				print $synlog ",selected\n";
+			} else {
+				print $synlog ",deleted\n";
+				push @deleteseqs,${$dupsets}{$set}{set}{$dup}{id};
+			}
+		}
+		delete @baits{@deleteseqs};
+
+
+	}
+	close $synlog;
+
+
+	open my $OUTbaits, '>', "$outpath/$script.baits.uniques.fa" or die "Can't write unique baits to fasta\n";
+	foreach my $id (keys %baits){
+		print $OUTbaits ">$id\n$baits{$id}\n";
+	}
+	close $OUTbaits;
+
+	printf "Duplicate resolution complete, %d baits remain\n",scalar keys %baits if $verbose;
 
 }
-close $synlog;
+# Else print that taxonomy file not needed, nor is interactive any different from verbose
 
-
-open my $OUTbaits, '>', "$outpath/$script.baits.uniques.fa" or die "Can't write unique baits to fasta\n";
-foreach my $id (keys %baits){
-	print $OUTbaits ">$id\n$baits{$id}\n";
-}
-close $OUTbaits;
-
-printf "Duplicate resolution complete, %d baits remain\n",scalar keys %baits if $verbose;
 
 #
 # Do baiting
