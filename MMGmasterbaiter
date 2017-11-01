@@ -122,7 +122,7 @@ print "$usage\n" and exit if($help);
 
 die "Error: missing bait fasta\n" unless($baitfile);
 die "Error: missing contig fasta\n" unless($contigfile);
-die "Error: cannot run automatically without taxonomy information, please either supply taxonomy file or run interactively\n" unless($interactive or $taxonomyfile);
+die "Error: duplicate checking cannot run automatically without taxonomy information, please either supply taxonomy file or run interactively\n" unless($interactive or $taxonomyfile or !$dupcheck);
 
 #
 # Startup messages and input parsing
