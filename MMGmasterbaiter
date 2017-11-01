@@ -154,6 +154,7 @@ print "\nChecking for duplicate barcodes\n" if $verbose;
 
 # Blast for any duplicate bait sequences, or retrieve saved output
 my $dupsets;
+my $savedfilename = "$outpath/$script".timestamp().".savedprogress.log";
 if($savedfile){
 	$dupsets = retrieve($savedfile);
 	print "Loaded saved progress, resuming.\n" if $verbose;
@@ -161,8 +162,8 @@ if($savedfile){
 	($dupsets) = blastfordups($baitfile, $nameconv,\%taxonomy,\%baits,\%parameters,$verbose);
 	
 	printf "%d sets of duplicates found.\n",scalar keys %$dupsets if $verbose;
-	store $dupsets, "$outpath/$baitfile.savedprogress.log";
-	print "Saving progress so far, run $script again using \"-saved $outpath/$baitfile.savedprogress.log\" to resume from this point if needed.\n";
+	store $dupsets, $savedfilename;
+	print "Saving progress so far, run $script again using \"-saved $savedfilename\" to resume from this point if needed.\n";
 }
 
 # Resolve matches
@@ -583,4 +584,7 @@ sub read_fasta {
 	return %fasta;
 }
 
-
+sub timestamp{
+my @time = localtime;
+return sprintf "%02d:%02d:%02d",$time[2],$time[1],$time[0];
+}
