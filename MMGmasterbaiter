@@ -5,6 +5,7 @@ use warnings;
 use strict;
 use Getopt::Long;
 use File::Basename;
+use File::Path qw(make_path);
 use LWP::Simple;
 use List::Util qw(sum);
 use Data::Dumper;
@@ -26,6 +27,7 @@ my %parameters = (
 		'taxmin' => 0.25,
 		);
 my $verbose;
+my $debug;
 my $help;
 
 
@@ -112,6 +114,7 @@ GetOptions("contigs=s"		=> \$contigfile,
 	   "output=s"		=> \$outpath,
 	   "interactive"	=> \$interactive,
 	   "verbose"		=> \$verbose,
+	   "debug"		=> \$debug,
 	   "help"		=> \$help) or die "Error: Incorrect options, try \"$script --help\" for more information.\n";
 
 print "$usage\n" and exit if($help);
@@ -122,16 +125,20 @@ print "$usage\n" and exit if($help);
 
 die "Error: missing bait fasta\n" unless($baitfile);
 die "Error: missing contig fasta\n" unless($contigfile);
-die "Error: duplicate checking cannot run automatically without taxonomy information, please either supply taxonomy file or run interactively\n" unless($interactive or $taxonomyfile or !$dupcheck);
+die "Error: cannot run automatically without taxonomy information, please either supply taxonomy file or run interactively\n" unless($interactive or $taxonomyfile or !$dupcheck);
 
 #
 # Startup messages and input parsing
 #
 
-# If interactive set verbose to be true whether or not flagged as input
-$verbose = 1 if $interactive;
+# If interactive or debug set verbose to be true whether or not flagged as input
+$verbose = 1 if($interactive or $debug);
 
 print "This is $script version $version.\n" if $verbose;
+
+# Create output directory
+
+make_path($outpath) unless(-e $outpath);
 
 # Read in fastas and report
 my %baits = read_fasta($baitfile);
@@ -149,14 +156,17 @@ my %baitnames = map { $_ => 1} (keys %taxonomy, keys %libraries);
 my $nameconv = parse_baitnames(\%baits,\%baitnames,\%parameters,$verbose);
 print "Matched bait ids with names in supplementary data\n" if($verbose and (%taxonomy or %libraries));
 
+print "Nameconv hash follows:\n" if $debug;
+print Dumper $nameconv if $debug;
+
 #
 # Check for duplicate barcodes and delete from baits #TODO: synonymise libraries?
 #
-
+if($dupcheck){
 print "\nChecking for duplicate barcodes\n" if $verbose;
 
 # Blast for any duplicate bait sequences, or retrieve saved output
-if($dupcheck){
+
 	my $dupsets;
 	my $savedfilename = "$outpath/$script".timestamp().".savedprogress.log";
 	if($savedfile){
@@ -284,22 +294,23 @@ print $baitlog "contigid,nbaitmatches,baitname,baitid,criterion\n";
 open my $OUTctgs, '>', "$outpath/contigs.baited.fa";
 
 foreach my $ctgid (keys %contigs){
-	#print "Processing contig $ctgid:\n" if $verbose;
+	print "Processing contig $ctgid:\n" if $debug;
 	my $nresults = scalar keys %{${$baitresult}{$ctgid}};
-	#print "\t$nresults baits match, " if $verbose;
+	print Dumper ${$baitresult}{$ctgid} if $debug;
+	print "\t$nresults baits match, " if $debug;
 	my $selectid;
 	my $criterion;
 	my $selectname;
 	if($nresults == 0){
-		#print "no identification could be made\n" if $verbose;
+		print "no identification could be made\n" if $debug;
 		$criterion = "nobaitmatches";
 	} elsif($nresults ==1) {
 		$selectid = (keys  %{${$baitresult}{$ctgid}})[0];
-		#print "identified to $selectid\n" if $verbose;
+		print "identified to $selectid\n" if $debug;
 		$criterion = "onlymatch";
 		$selectname = ${$nameconv}{$selectid};
 	} else {
-		#print "selecting match according to identity..." if $verbose;
+		print "selecting match according to identity...\n" if $debug;
 		my %matchnames;
 		foreach my $id (keys %{${$baitresult}{$ctgid}}){
 			my $name = ${$nameconv}{$id};
@@ -308,6 +319,7 @@ foreach my $ctgid (keys %contigs){
 			$matchnames{$name}{sumid} += ${$baitresult}{$ctgid}{$id}{identity};
 			$matchnames{$name}{totseqs} = scalar (grep {/$name/} values %{$nameconv});
 		}
+		print Dumper \%matchnames if $debug;
 		foreach my $name (keys %matchnames){
 			$matchnames{$name}{meanid} = $matchnames{$name}{sumid}/$matchnames{$name}{nseqs};
 			$matchnames{$name}{propseqs} = $matchnames{$name}{nseqs}/$matchnames{$name}{totseqs};
@@ -317,7 +329,7 @@ foreach my $ctgid (keys %contigs){
 			my @baitname_sort = sort { $matchnames{$a}{meanid} <=> $matchnames{$b}{meanid} || $matchnames{$a}{propseqs} <=> $matchnames{$b}{propseqs} } keys %matchnames;
 		
 			if($matchnames{$baitname_sort[0]}{meanid} > $matchnames{$baitname_sort[1]}{meanid} and $matchnames{$baitname_sort[0]}{propseqs} > $matchnames{$baitname_sort[1]}{propseqs}){
-				#print "top name match found: $baitname_sort[0]\n" if $verbose;
+				print "\ttop name match found: $baitname_sort[0]\n" if $debug;
 				if($matchnames{$baitname_sort[0]}{nseqs} == 1){
 					$selectid = $matchnames{$baitname_sort[0]}{repid};
 					$criterion = "topidentity";
@@ -327,12 +339,12 @@ foreach my $ctgid (keys %contigs){
 					$selectname = $baitname_sort[0];
 				}
 			} else {
-				#print "top name match could not be distinguished, equally high matching sequences found with different names\n" if $verbose;
+				print "\ttop name match could not be distinguished, equally high matching sequences found with different names\n" if $debug;
 				$criterion = "nodistinctmatch - see blast results to make manual decision";
 			}
 		} else {
 			$selectname = (keys %matchnames)[0];
-			#print "identified to $selectname\n" if $verbose;
+			print "identified to $selectname\n" if $debug;
 			$criterion = "onlynamematch";
 		}
 		$selectid = "$matchnames{$selectname}{nseqs} of $matchnames{$selectname}{totseqs} baits of $selectname, mean identity $matchnames{$selectname}{meanid}" if(!$selectid and $selectname);
@@ -340,9 +352,9 @@ foreach my $ctgid (keys %contigs){
 	print $baitlog "$ctgid,$nresults,",$selectname ? "$selectname," : "NA,", $selectid ? "$selectid," : "NA," ,"$criterion\n";
 	print $OUTctgs ">$ctgid";
 	if($selectname){
-		print $OUTctgs "|$selectname|";
-		print $OUTctgs "|",$criterion = "topnamebatch" ? "[multiplebaits]" : $selectid;
-		print $OUTctgs "|",%taxonomy ? $taxonomy{$selectname} : "";
+		print $OUTctgs "|$selectname";
+		#print $OUTctgs "|",$criterion = "topnamebatch" ? "[multiplebaits]" : $selectid;
+		#print $OUTctgs "|",%taxonomy ? $taxonomy{$selectname} : "";
 	}
 	print $OUTctgs "\n$contigs{$ctgid}\n";
 }
@@ -382,7 +394,7 @@ sub blasttobait{
 	printf "Total of %d BLAST results\n",scalar @blastresults if $verbose;
 	my %results;
 	
-	open my $blastlog,'>',"$outpath/$script.baiting.blast.log";
+	open my $blastlog,'>',"$outpath/$script.baiting.blast.log" or die "Can't write blast log to $outpath";
 	print $blastlog "qseqid\tsseqid\tpident\tlength\tevalue\n";
 	
 	foreach my $row (@blastresults){
@@ -530,7 +542,13 @@ sub parse_baitnames {
 			die "Error: $id matches multiple names: ",join(", ",@matches) if($#matches>0); ##TODO: if necessary, include error catch if name not in both taxonomy and libraries
 			$nameconv{$id} = $matches[0];
 		} else {
-			$nameconv{$id} = (split /[_.-]/,$id)[${$parameters}{namefield}-1];
+			my $name = (split /[_.-]/,$id)[${$parameters}{namefield}-1];
+			if($name){
+				$nameconv{$id} = $name;
+			} else {
+				print "Warning: bait $id is missing namefield ${$parameters}{namefield}. The full header will be used instead.\n";
+				$nameconv{$id} = $id;
+			}
 		}
 	}
 	##TODO: Report number of names that do not match to any ID (note, multiple IDs may match to same name if multiple bait loci for same species)
