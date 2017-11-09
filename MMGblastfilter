@@ -10,6 +10,7 @@ use File::Basename;
 my @fastqs;
 my @blasts;
 my $help;
+my ($keep, $remove);
 
 my $script = basename($0, ());
 
@@ -19,10 +20,10 @@ my $script = basename($0, ());
 my $usage =<<USAGE;
 
 Description:
-
-	$script takes one or more fastq files and removes any sequences without matches in one or more blast output files. Generally if more than one file is passed they will be the forward and reverse reads of a single library, and the blast output files will be those produced by blasting each of these reads files separately. In such a case, this script removes the need to concatenate two blast files.
-	A separate fastq is output for each input fastq. Note that in theory this could be used to batch through multiple different libraries if all sequences had unique names, despite all blast files being internally concatenated. However this is untested and unadvised.
-
+	In conjunction with running blast against a custom database comprising reference sequence or sequences, this script allows easy filtering of large files of sequences according to one or many references sequences.
+	$script takes one or more fastq files and filters sequences based on one or more blast output files. Generally if more than one file is passed they will be the forward and reverse reads of a single library, and the blast output files will be those produced by blasting each of these reads files separately. In such a case, this script removes the need to concatenate two blast files.
+	Filtering can either -keep or -remove sequences that are present in the blast files. These two flags cannot be used together. A separate fastq is output for each input fastq.
+	
 Usage:
 
 	$script --fastq <in.fq> [--fastq <in2.fq>] --blast <in.txt> [--blast <in2.txt]
@@ -31,6 +32,8 @@ Arguments:
 
 	  fastq:  The file path of a fastq to filter. Each fastq requires a separate --fastq argument.
 	  blast:  The file path of a blast output, tab-delimited, in which the first column is query names - as output by blast format 6. Each blast output requires a separate --fastq argument.
+	   keep:  Keep any sequences in fastq that are present in the blast files.
+         remove:  Remove any sequences in fastq that are present in the blast files.
 	   help:  Prints out this helpful message.
 
 USAGE
@@ -39,11 +42,15 @@ USAGE
 
 GetOptions("fastq=s"		=> \@fastqs,
 	   "blast=s"		=> \@blasts,
+	   "keep"		=> \$keep,
+	   "remove"		=> \$remove,
 	   "help"		=> \$help) or die "Error getting options\n";
 
 print $usage and exit if $help;
 
 die "\nError: $script requires at least one fastq and at least one blast output.\n\n" unless(@fastqs and @blasts);
+die "\nError: -keep and -remove are mutually exclusive, please only input one.\n\n" if($keep and $remove);
+die "\nError: please use flags -keep or -remove to tell me how to filter.\n\n" unless($keep or $remove);
 
 # Read in blast file(s)
 my %headers_passed;
@@ -65,18 +72,19 @@ foreach my $fastqpath (@fastqs){
 	print $name,"\n";
 	open my $fqout, '>', "$name.filtered.fq" or die "Cannot write to $name.filtered.fq\n";
 	
-	my $match;
+	my $print;
 	while(my $line = <$fqin>){
 		if($line =~ /^@((?:[A-Z0-9-]+:)+[A-Z0-9-]+)(\s(?:[A-Z0-9-]+:)+[A-Z0-9-]+)?$/){
 			$nsequences++;
-			if(exists $headers_passed{$1}){
-				$match++;
+			my $present = exists $headers_passed{$1};
+			if(($present and $keep) or (!$present and $remove)){
+				$print++;
 				print $fqout $line;
 				$nprinted++;
 			} else {
-				undef($match);
+				undef($print);
 			}
-		} elsif($match) {
+		} elsif($print) {
 			print $fqout $line;
 		}
 	}
