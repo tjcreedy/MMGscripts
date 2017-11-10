@@ -9,8 +9,9 @@ use File::Basename;
 
 my @fastqs;
 my @blasts;
-my $help;
+my $suffix;
 my ($keep, $remove);
+my $help;
 
 my $script = basename($0, ());
 
@@ -32,6 +33,7 @@ Arguments:
 
 	  fastq:  The file path of a fastq to filter. Each fastq requires a separate --fastq argument.
 	  blast:  The file path of a blast output, tab-delimited, in which the first column is query names - as output by blast format 6. Each blast output requires a separate --fastq argument.
+	 suffix:  Optional. Text to add to the file name of the output fastqs.
 	   keep:  Keep any sequences in fastq that are present in the blast files.
          remove:  Remove any sequences in fastq that are present in the blast files.
 	   help:  Prints out this helpful message.
@@ -42,6 +44,7 @@ USAGE
 
 GetOptions("fastq=s"		=> \@fastqs,
 	   "blast=s"		=> \@blasts,
+	   "suffix=s"		=> \$suffix,
 	   "keep"		=> \$keep,
 	   "remove"		=> \$remove,
 	   "help"		=> \$help) or die "Error getting options\n";
@@ -62,6 +65,12 @@ foreach my $blastpath (@blasts){
 		$headers_passed{$1}=1;
 	}
 	close $blout;
+}
+
+if($suffix){
+	$suffix .= "."
+} else {
+	$suffix = ""
 }
 
 foreach my $fastqpath (@fastqs){
