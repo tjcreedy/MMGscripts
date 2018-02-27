@@ -11,6 +11,7 @@ my @fastqs;
 my @blasts;
 my $suffix;
 my ($keep, $remove);
+my $debug;
 my $help;
 
 my $script = basename($0, ());
@@ -47,7 +48,8 @@ GetOptions("fastq=s"		=> \@fastqs,
 	   "suffix=s"		=> \$suffix,
 	   "keep"		=> \$keep,
 	   "remove"		=> \$remove,
-	   "help"		=> \$help) or die "Error getting options\n";
+	   "help"		=> \$help,
+	   "debug"		=> \$debug) or die "Error getting options\n";
 
 print $usage and exit if $help;
 
@@ -56,6 +58,8 @@ die "\nError: -keep and -remove are mutually exclusive, please only input one.\n
 die "\nError: please use flags -keep or -remove to tell me how to filter.\n\n" unless($keep or $remove);
 
 # Read in blast file(s)
+print "Reading blast file(s)...";
+
 my %headers_passed;
 foreach my $blastpath (@blasts){
 	open my $blout, '<', $blastpath or die "Cannot open $blastpath\n";
@@ -67,8 +71,11 @@ foreach my $blastpath (@blasts){
 	close $blout;
 }
 
+printf "%d results successfully read.\n", scalar keys %headers_passed; 
+
 if($suffix){
-	$suffix .= "."
+	$suffix .= ".";
+	print "Output file(s) will use suffix $suffix\n";
 } else {
 	$suffix = ""
 }
@@ -78,12 +85,12 @@ foreach my $fastqpath (@fastqs){
 	open my $fqin, '<', $fastqpath or die "Cannot read $fastqpath\n";
 	
 	my $name = fileparse($fastqpath,(".fq",".fastq"));
-	print $name,"\n";
-	open my $fqout, '>', "$name.filtered.fq" or die "Cannot write to $name.filtered.fq\n";
+	print "Filtering ",$name,"\n";
+	open my $fqout, '>', "$name.filtered.${suffix}fq" or die "Cannot write to $name.filtered.${suffix}fq\n";
 	
 	my $print;
 	while(my $line = <$fqin>){
-		if($line =~ /^@((?:[A-Z0-9-]+:)+[A-Z0-9-]+)(\s(?:[A-Z0-9-]+:)+[A-Z0-9-]+)?$/){
+		if($line =~ /^@((?:[A-Z0-9-]+:)+[A-Z0-9-]+)($|\s.+$)/){
 			$nsequences++;
 			my $present = exists $headers_passed{$1};
 			if(($present and $keep) or (!$present and $remove)){
