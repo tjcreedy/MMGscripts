@@ -17,8 +17,8 @@ my $help;
 my $script = basename($0, ());
 
 # Parsers
-my $illumina = "^@((?:[A-Z0-9-]+:)+[A-Z0-9-]+)($|\s.+$)";
-my $BGIseq = "^@([A-Z]{2}\d{9}L\dC\d{3}R\d{3}_\d+\/[1-2])$";
+my $illumina = '^@((?:[A-Z0-9-]+:)+[A-Z0-9-]+)($|\s.+$)';
+my $BGIseq = '^@([A-Z]{2}\d{9}L\dC\d{3}R\d{3}_\d+\/[1-2])$';
 
 
 
@@ -113,7 +113,7 @@ foreach my $fastqpath (@fastqs){
 		}else{
 			die "Cannot detect input fastq header format\n";
 		}
-		seek <$fqin>,0,0;
+		seek $fqin,0,0;
 	}
 
 	my $print;
