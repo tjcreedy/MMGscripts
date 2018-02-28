@@ -16,6 +16,13 @@ my $help;
 
 my $script = basename($0, ());
 
+# Parsers
+my $illumina = "^@((?:[A-Z0-9-]+:)+[A-Z0-9-]+)($|\s.+$)";
+my $BGIseq = "^@([A-Z]{2}\d{9}L\dC\d{3}R\d{3}_\d+\/[1-2])$";
+
+
+
+
 ########################################################
 # USAGE
 #
@@ -87,6 +94,7 @@ if($suffix){
 	$suffix = ""
 }
 
+my $headparser;
 foreach my $fastqpath (@fastqs){
 	my ($nsequences,$nprinted) = (0,0);
 	open my $fqin, '<', $fastqpath or die "Cannot read $fastqpath\n";
@@ -95,6 +103,19 @@ foreach my $fastqpath (@fastqs){
 	print "Filtering ",$name,"\n";
 	open my $fqout, '>', "$name.filtered.${suffix}fq" or die "Cannot write to $name.filtered.${suffix}fq\n";
 	
+	
+	if($fastqpath eq $fastqs[0]){
+		my $fline = <$fqin>;
+		if($fline =~ /$illumina/){
+			$headparser = $illumina;
+		}elsif($fline =~ /$BGIseq/){
+			$headparser = $BGIseq;
+		}else{
+			die "Cannot detect input fastq header format\n";
+		}
+		seek <$fqin>,0,0;
+	}
+
 	my $print;
 	while(my $line = <$fqin>){
 		if($line =~ /^@((?:[A-Z0-9-]+:)+[A-Z0-9-]+)($|\s.+$)/){
