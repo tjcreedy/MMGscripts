@@ -71,6 +71,13 @@ foreach my $blastpath (@blasts){
 	close $blout;
 }
 
+if($debug){
+	print "DEBUG: first 100 BLAST passed headers follow\n";
+	my @hundredheads = (keys %headers_passed)[0..99];
+	print Dumper \@hundredheads;
+}
+
+
 printf "%d results successfully read.\n", scalar keys %headers_passed; 
 
 if($suffix){
@@ -91,6 +98,7 @@ foreach my $fastqpath (@fastqs){
 	my $print;
 	while(my $line = <$fqin>){
 		if($line =~ /^@((?:[A-Z0-9-]+:)+[A-Z0-9-]+)($|\s.+$)/){
+			print "DEBUG checking header $line\n" if $debug;			
 			$nsequences++;
 			my $present = exists $headers_passed{$1};
 			if(($present and $keep) or (!$present and $remove)){
