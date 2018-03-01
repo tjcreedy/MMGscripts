@@ -17,8 +17,9 @@ my $help;
 my $script = basename($0, ());
 
 # Parsers
+my $blastparse = '^([A-Za-z:_\d]+)[\s\/]';
 my $illumina = '^@((?:[A-Z0-9-]+:)+[A-Z0-9-]+)($|\s.+$)';
-my $BGIseq = '^@([A-Z]{2}\d{9}L\dC\d{3}R\d{3}_\d+\/[1-2])$';
+my $BGIseq = '^@([A-Z]{2}\d{9}L\dC\d{3}R\d{3}_\d+)\/[1-2]$';
 
 
 ########################################################
@@ -70,7 +71,7 @@ foreach my $blastpath (@blasts){
 	open my $blout, '<', $blastpath or die "Cannot open $blastpath\n";
 	while(my $line = <$blout>){
 		chomp $line;
-		$line =~ m/^(\S+)\s/;
+		$line =~ /$blastparse/;
 		$headers_passed{$1}=1;
 	}
 	close $blout;
@@ -105,7 +106,7 @@ foreach my $fastqpath (@fastqs){
 	
 	if($fastqpath eq $fastqs[0]){
 		my $fline = <$fqin>;
-		print "DEBUG: identifying header type using line:\n$fline\n" if $debug;
+		print "DEBUG: identifying header type using first line:\n$fline\n" if $debug;
 		if($fline =~ /$illumina/){
 			$headparser = $illumina;
 			print "Headers identified as Illumina\n";
