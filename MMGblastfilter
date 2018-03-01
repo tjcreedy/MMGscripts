@@ -21,8 +21,6 @@ my $illumina = '^@((?:[A-Z0-9-]+:)+[A-Z0-9-]+)($|\s.+$)';
 my $BGIseq = '^@([A-Z]{2}\d{9}L\dC\d{3}R\d{3}_\d+\/[1-2])$';
 
 
-
-
 ########################################################
 # USAGE
 #
@@ -35,7 +33,7 @@ Description:
 	
 Usage:
 
-	$script --fastq <in.fq> [--fastq <in2.fq>] --blast <in.txt> [--blast <in2.txt]
+	$script --fastq <in.fq> [--fastq <in2.fq>] --blast <in.txt> [--blast <in2.txt] [--suffix <text>] [--keep] [--remove]
 
 Arguments:
 
@@ -78,14 +76,15 @@ foreach my $blastpath (@blasts){
 	close $blout;
 }
 
+printf "%d results successfully read.\n", scalar keys %headers_passed; 
+
 if($debug){
-	print "DEBUG: first 100 BLAST passed headers follow\n";
+	print "\nDEBUG: first 100 BLAST passed headers follow\n";
 	my @hundredheads = (keys %headers_passed)[0..99];
 	print Dumper \@hundredheads;
 }
 
 
-printf "%d results successfully read.\n", scalar keys %headers_passed; 
 
 if($suffix){
 	$suffix .= ".";
@@ -106,10 +105,13 @@ foreach my $fastqpath (@fastqs){
 	
 	if($fastqpath eq $fastqs[0]){
 		my $fline = <$fqin>;
+		print "DEBUG: identifying header type using line:\n$fline\n" if $debug;
 		if($fline =~ /$illumina/){
 			$headparser = $illumina;
+			print "Headers identified as Illumina\n";
 		}elsif($fline =~ /$BGIseq/){
 			$headparser = $BGIseq;
+			print "Headers identified as BGIseq\n";
 		}else{
 			die "Cannot detect input fastq header format\n";
 		}
@@ -118,7 +120,7 @@ foreach my $fastqpath (@fastqs){
 
 	my $print;
 	while(my $line = <$fqin>){
-		if($line =~ /^@((?:[A-Z0-9-]+:)+[A-Z0-9-]+)($|\s.+$)/){
+		if($line =~ /$headparser/){
 			print "DEBUG checking header $line\n" if $debug;			
 			$nsequences++;
 			my $present = exists $headers_passed{$1};
