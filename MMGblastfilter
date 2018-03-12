@@ -67,25 +67,25 @@ die "\nError: please use flags -keep or -remove to tell me how to filter.\n\n" u
 print "Reading blast file(s)...";
 
 my %headers_passed;
+my $lines_read;
 foreach my $blastpath (@blasts){
 	open my $blout, '<', $blastpath or die "Cannot open $blastpath\n";
 	while(my $line = <$blout>){
 		chomp $line;
 		$line =~ /$blastparse/;
 		$headers_passed{$1}=1;
+		$lines_read++;
 	}
 	close $blout;
 }
 
-printf "%d results successfully read.\n", scalar keys %headers_passed; 
+printf "$lines_read lines successfully read, %d paired names loaded for filtering.\n", scalar keys %headers_passed; 
 
 if($debug){
 	print "\nDEBUG: first 100 BLAST passed headers follow\n";
 	my @hundredheads = (keys %headers_passed)[0..99];
 	print Dumper \@hundredheads;
 }
-
-
 
 if($suffix){
 	$suffix .= ".";
@@ -122,7 +122,7 @@ foreach my $fastqpath (@fastqs){
 	my $print;
 	while(my $line = <$fqin>){
 		if($line =~ /$headparser/){
-			print "DEBUG checking header $line\n" if $debug;			
+			print "DEBUG checking header $line using key $1\n" if $debug;			
 			$nsequences++;
 			my $present = exists $headers_passed{$1};
 			if(($present and $keep) or (!$present and $remove)){
