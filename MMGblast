@@ -1,0 +1,86 @@
+#!/usr/bin/perl
+#By Thomas J Creedy, thomas@tjcreedy.co.uk 
+
+use warnings;
+use strict;
+use Getopt::Long;
+use Data::Dumper;
+use File::Basename;
+use Parallel::ForkManager;
+
+my $blastdb;
+my $forks;
+my $threads;
+my $out;
+my $verbose;
+my $debug;
+my $help;
+
+my $script = basename($0, ());
+
+########################################################
+# USAGE
+#
+my $usage =<<USAGE;
+
+Description:
+	This script runs blast on each of a list of fastas against a supplied database. The outputs are saved in a directory specified. The blast command run is:
+	
+	blastn -db <database> -query <file> -out <out/file.blast> -task dc-megablast -evalue 1e-5 -max_target_seqs 1 -outfmt 6 -dust no -num_threads <threads>
+	
+	You can specify the number of threads to run each blast command on (-blastthreads) and the number of blasts to run simultaneously (-simulblasts). The total number of consecutive threads will be the product of these two values.
+Usage:
+
+	$script -database <file> -simulblasts <n> -blastthreads <n> -output <path> <fasta1> [<fasta2>]
+
+Arguments:
+
+	    database:  The path to blast database to search against, specified exactly as would be specified in a blast command.
+	 simulblasts:  The number of simultaneous blasts to run.
+	blastthreads:  The number of threads to run each blast on.
+	      output:  Path to a directory in which to place the blast output files.
+	        help:  Prints out this helpful message.
+
+USAGE
+#
+######################################################
+
+GetOptions("database=s"		=> \$blastdb,
+	   "simulblasts=i"	=> \$forks,
+	   "blastthreads=i"	=> \$threads,
+	   "output=s"		=> \$out,
+	   "help"		=> \$help,
+	   "debug"		=> \$debug) or die "Error getting options\n";
+
+print $usage and exit if $help;
+
+die "Error: Please supply an option to all parameters\n" unless $blastdb and $forks and $threads and $out;
+
+my @fastas = @ARGV;
+
+die "Error: Please supply at least one fasta\n" unless @fastas;
+
+my $bfork = Parallel::ForkManager->new($forks);
+
+my $done_blasts=0;
+
+$bfork->run_on_finish( sub {
+	my ($pid, $exit_code, $ident, $exit_signal, $core_dump, $data_structure_reference) = @_;
+	$done_blasts++;
+	printf "Completed blasting $done_blasts/%d files\r", scalar @fastas if $verbose;
+});
+
+printf "Starting to blast %d fastas $forks at a time with $threads threads each\n", scalar @fastas if $verbose;
+
+foreach my $name (sort @fastas){
+	my $pid = $bfork->start and next;
+	
+	( my $outpath = $out ) =~ s/\.fa.+$/.blast/;
+	$outpath = "$out/$outpath";
+	
+	system("blastn -db $blastdb -query $name -out $outpath -task dc-megablast -evalue 1e-5 -max_target_seqs 1 -outfmt 6 -dust no -num_threads $threads");
+	
+	$bfork->finish(0, {result => $out, name => $name});
+}
+
+exit;
