@@ -76,15 +76,12 @@ $bfork->run_on_finish( sub {
 
 printf "Starting to blast %d fastas $forks at a time with $threads threads each\n", scalar @fastas if $verbose;
 
-foreach my $name (@fastas){
+foreach my $file (@fastas){
 	my $pid = $bfork->start and next;
 	
-	( my $outpath = $name ) =~ s/\.fa.*$/.blast/;
-	$out =~ s/\/$//;
+	my ($name, $path, $suffix) = fileparse($file);
 	
-	$outpath = "$out/$outpath";
-	
-	my $command = "blastn -db $blastdb -query $name -out $outpath -task dc-megablast -evalue 1e-5 -max_target_seqs 1 -outfmt 6 -dust no -num_threads $threads";
+	my $command = "blastn -db $blastdb -query $file -out $out/$name.blast -task dc-megablast -evalue 1e-5 -max_target_seqs 1 -outfmt 6 -dust no -num_threads $threads";
 	print $command,"\n" if $debug;
 	
 	my $log = `$command`;
