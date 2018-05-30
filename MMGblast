@@ -39,6 +39,7 @@ Arguments:
 	 simulblasts:  The number of simultaneous blasts to run.
 	blastthreads:  The number of threads to run each blast on.
 	      output:  Path to a directory in which to place the blast output files.
+	     verbose:  Print useful info to the terminal.
 	        help:  Prints out this helpful message.
 
 USAGE
