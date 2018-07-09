@@ -9,6 +9,7 @@ use File::Basename;
 use Parallel::ForkManager;
 
 my $blastdb;
+my $gilist;
 my $forks;
 my $threads;
 my $out;
@@ -36,6 +37,7 @@ Usage:
 Arguments:
 
 	    database:  The path to blast database to search against, specified exactly as would be specified in a blast command.
+	      gilist:  Path to a file containing a list of GenBank Identifiers (one per line) to restrict the search to.
 	 simulblasts:  The number of simultaneous blasts to run.
 	blastthreads:  The number of threads to run each blast on.
 	      output:  Path to a directory in which to place the blast output files.
@@ -47,6 +49,7 @@ USAGE
 ######################################################
 
 GetOptions("database=s"		=> \$blastdb,
+	   "gilist=s"		=> \$gilist,
 	   "simulblasts=i"	=> \$forks,
 	   "blastthreads=i"	=> \$threads,
 	   "output=s"		=> \$out,
@@ -83,9 +86,10 @@ foreach my $file (@fastas){
 	my ($name, $path, $suffix) = fileparse($file);
 	
 	my $command = "blastn -db $blastdb -query $file -out $out/$name.blast -task dc-megablast -evalue 1e-5 -max_target_seqs 1 -outfmt 6 -dust no -num_threads $threads";
+	$command .= " -gilist $gilist" if $gilist;
 	print $command,"\n" if $debug;
 	
-	my $log = `$command`;
+	my $log = `$command` or die "Error: Cannot locate the blast executable. Please ensure blastn is in PATH\n";
 	print $log,"\n" if $debug;
 	
 	$bfork->finish(0);
