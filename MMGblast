@@ -89,7 +89,7 @@ foreach my $file (@fastas){
 	$command .= " -gilist $gilist" if $gilist;
 	print $command,"\n" if $debug;
 	
-	my $log = `$command` or die "Error: Cannot locate the blast executable. Please ensure blastn is in PATH\n";
+	my $log = `$command`; # or die "Error: Cannot locate the blast executable. Please ensure blastn is in PATH\n";
 	print $log,"\n" if $debug;
 	
 	$bfork->finish(0);
