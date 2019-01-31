@@ -17,7 +17,7 @@ my $help;
 my $script = basename($0, ());
 
 # Parsers
-my $blastparse = '^([A-Za-z:_\d]+)[\s\/]';
+my $blastparse = '^([A-Za-z-:_\d]+)[\s\/]';
 my $illumina = '^@((?:[A-Z0-9-]+:){6}[A-Z0-9-]+)($|\s.+$)';
 my $BGIseq = '^@([A-Z]{2}\d{9}L\dC\d{3}R\d{3}_\d+)\/[1-2]$';
 
