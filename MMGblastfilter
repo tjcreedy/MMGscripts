@@ -10,7 +10,7 @@ use File::Basename;
 my @fastqs;
 my @blasts;
 my $suffix;
-my ($keep, $remove);
+my ($keep, $remove, $ignorehead);
 my $debug;
 my $help;
 
@@ -21,7 +21,6 @@ my $blastparse = '^([A-Za-z-:_\d\.]+)[\s\/]';
 my $illumina = '^@((?:[A-Z0-9-]+:){6}[A-Z0-9-]+)($|\s.+$)';
 my $BGIseq = '^@([A-Z]{2}\d{9}L\dC\d{3}R\d{3}_\d+)\/[1-2]$';
 
-
 ########################################################
 # USAGE
 #
@@ -31,10 +30,11 @@ Description:
 	In conjunction with running blast against a custom database comprising reference sequence or sequences, this script allows easy filtering of large files of sequences according to one or many references sequences.
 	$script takes one or more fastq files and filters sequences based on one or more blast output files. Generally if more than one file is passed they will be the forward and reverse reads of a single library, and the blast output files will be those produced by blasting each of these reads files separately. In such a case, this script removes the need to concatenate two blast files.
 	Filtering can either -keep or -remove sequences that are present in the blast files. These two flags cannot be used together. A separate fastq is output for each input fastq.
+	The script auto-detects sequence header IDs for Illumina and BGI format raw fastqs, in order to properly identify pairs and ignore direction information. If your headers are completely identical in forward and reverse reads, or you only have a single or unrelated fastq files, you can ignore these checks using --ignorehead.
 	
 Usage:
 
-	$script --fastq <in.fq> [--fastq <in2.fq>] --blast <in.txt> [--blast <in2.txt] [--suffix <text>] [--keep] [--remove]
+	$script --fastq <in.fq> [--fastq <in2.fq>] --blast <in.txt> [--blast <in2.txt] [--suffix <text>] [--keep] [--remove] [--ignorehead]
 
 Arguments:
 
@@ -43,6 +43,7 @@ Arguments:
 	 suffix:  Optional. Text to add to the file name of the output fastqs.
 	   keep:  Keep any sequences in fastq that are present in the blast files.
          remove:  Remove any sequences in fastq that are present in the blast files.
+     ignorehead:  Don't autodetect and remove direction data in headers.
 	   help:  Prints out this helpful message.
 
 USAGE
@@ -54,6 +55,7 @@ GetOptions("fastq=s"		=> \@fastqs,
 	   "suffix=s"		=> \$suffix,
 	   "keep"		=> \$keep,
 	   "remove"		=> \$remove,
+	   "ignorehead"	=> \$ignorehead,
 	   "help"		=> \$help,
 	   "debug"		=> \$debug) or die "Error getting options\n";
 
@@ -103,20 +105,21 @@ foreach my $fastqpath (@fastqs){
 	print "Filtering ",$name,"\n";
 	open my $fqout, '>', "$name.filtered.${suffix}fq" or die "Cannot write to $name.filtered.${suffix}fq\n";
 	
-	
-	if($fastqpath eq $fastqs[0]){
-		my $fline = <$fqin>;
-		print "DEBUG: identifying header type using first line:\n$fline\n" if $debug;
-		if($fline =~ /$illumina/){
-			$headparser = $illumina;
-			print "Headers identified as Illumina\n";
-		}elsif($fline =~ /$BGIseq/){
-			$headparser = $BGIseq;
-			print "Headers identified as BGIseq\n";
-		}else{
-			die "Cannot detect input fastq header format\n";
+	unless($ignorehead){
+		if($fastqpath eq $fastqs[0]){
+			my $fline = <$fqin>;
+			print "DEBUG: identifying header type using first line:\n$fline\n" if $debug;
+			if($fline =~ /$illumina/){
+				$headparser = $illumina;
+				print "Headers identified as Illumina\n";
+			}elsif($fline =~ /$BGIseq/){
+				$headparser = $BGIseq;
+				print "Headers identified as BGIseq\n";
+			}else{
+				die "Cannot detect input fastq header format. If detection is unneeded, run with --ignorehead.\n";
+			}
+			seek $fqin,0,0;
 		}
-		seek $fqin,0,0;
 	}
 
 	my $print;
