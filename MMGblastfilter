@@ -19,7 +19,7 @@ my $script = basename($0, ());
 # Parsers
 my $blastparse = '^([A-Za-z-:_\d\.]+)[\s\/]';
 my $illumina = '^@((?:[A-Z0-9-]+:){6}[A-Z0-9-]+)($|\s.+$)';
-my $BGIseq = '^@([A-Z]{2}\d{9}L\dC\d{3}R\d{3}_\d+)\/[1-2]$';
+my $BGIseq = '^@([A-Z]{1,2}\d{9}L\dC\d{3}R\d{3}_?\d+)\/[1-2]$';
 my $genericfq = '^@([A-Za-z-:_\d\.]+)';
 
 ########################################################
@@ -128,7 +128,7 @@ foreach my $fastqpath (@fastqs){
 	my $print;
 	while(my $line = <$fqin>){
 		if($line =~ /$headparser/){
-			print "DEBUG checking header $line using key $1\n" if $debug;			
+			print "DEBUG checking header $line using key $1\n" if $debug;
 			$nsequences++;
 			my $present = exists $headers_passed{$1};
 			if(($present and $keep) or (!$present and $remove)){
